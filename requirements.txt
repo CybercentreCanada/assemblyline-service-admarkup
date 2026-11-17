@@ -1,0 +1,2 @@
+assemblyline==4.7.0.5
+assemblyline-v4-service==4.7.0.5

@@ -1,0 +1,45 @@
+{
+  "id": "response-synthetic-001",
+  "seatbid": [
+    {
+      "seat": "synthetic-seat",
+      "bid": [
+        {
+          "id": "bid-synthetic-001",
+          "impid": "imp-synthetic-001",
+          "price": 0.42,
+          "adm": "<div class=\"campaign\">Synthetic display</div>"
+        },
+        {
+          "id": "bid-synthetic-002",
+          "impid": "imp-synthetic-002",
+          "price": 0.73,
+          "adm": "<div class=\"campaign\">Synthetic display</div>"
+        },
+        {
+          "id": "bid-synthetic-003",
+          "impid": "imp-synthetic-003",
+          "price": 0.91,
+          "adm": "const campaign = \"synthetic\";\nconst label = \"café\";"
+        },
+        {
+          "id": "bid-synthetic-004",
+          "impid": "imp-synthetic-004",
+          "price": 0.18,
+          "adm": false
+        },
+        {
+          "id": "bid-synthetic-005",
+          "impid": "imp-synthetic-005",
+          "price": 0.27,
+          "request": {
+            "adm": "Synthetic nested decoy"
+          }
+        }
+      ]
+    }
+  ],
+  "ext": {
+    "adm": "Synthetic root decoy"
+  }
+}

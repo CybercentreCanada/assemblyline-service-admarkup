@@ -1,0 +1,28 @@
+{
+  "template": "https://github.com/CybercentreCanada/assemblyline-service-template.git",
+  "commit": "082ca0fe29887851cad1b54ddfbf37163b45a9cb",
+  "checkout": "082ca0fe29887851cad1b54ddfbf37163b45a9cb",
+  "context": {
+    "cookiecutter": {
+      "service_name": "admarkup",
+      "__svc_name": "admarkup",
+      "__repository": "assemblyline-service-admarkup",
+      "__pkg_name": "admarkup",
+      "class_name": "AdMarkup",
+      "short_description": "Identifies and extracts advertising markup from supported OpenRTB bid responses.",
+      "short_description_fr": "",
+      "stage": "EXTRACT",
+      "category": "Extraction",
+      "org_name_full": "CybercentreCanada",
+      "org_name_short": "cccs",
+      "license": "mit",
+      "_extensions": [
+        "local_extensions.github_maintainer.Ext"
+      ],
+      "_template": "https://github.com/CybercentreCanada/assemblyline-service-template.git",
+      "_commit": "082ca0fe29887851cad1b54ddfbf37163b45a9cb",
+      "_github_maintainer": "cccs-jaw"
+    }
+  },
+  "directory": null
+}

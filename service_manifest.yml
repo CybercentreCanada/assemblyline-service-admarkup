@@ -1,0 +1,50 @@
+name: AdMarkup
+version: $SERVICE_TAG
+description: Identifies and extracts advertising markup from supported OpenRTB bid responses.
+
+# Regex defining the types of files the service accepts and rejects
+accepts: '^text/json$'
+rejects: empty
+
+# At which stage the service should run (one of FILTER, EXTRACT, CORE, SECONDARY, POST, REVIEW)
+# NOTE: Stages are executed in the order defined in the list
+stage: EXTRACT
+# Which category the service is part of (one of Antivirus, Dynamic Analysis, External, Extraction, Filtering, Internet Connected, Networking, Static Analysis)
+category: Extraction
+
+# Does the service require access to the file to perform its task
+# If set to false, the service will only have access to the file metadata (e.g. Hashes, size, type, ...)
+file_required: true
+# Maximum execution time the service has before it's considered to be timed out
+timeout: 60
+
+# is the service enabled by default
+enabled: true
+privileged: false
+is_external: false
+update_channel: stable
+
+config:
+  max_input_bytes: 10485760
+  max_json_depth: 64
+  max_json_nodes: 100000
+  max_extracted_children: 50
+  max_payload_bytes: 5242880
+  max_total_child_bytes: 20971520
+
+# Service heuristic blocks: List of heuristic objects that define the different heuristics used in the service
+# heuristics:
+#   - description: This is a demo heuristic
+#     filetype: "*"
+#     heur_id: 1
+#     name: Demo
+#     score: 100
+
+# Docker configuration block which defines:
+#  - the name of the docker container that will be created
+#  - CPU and ram allocation by the container
+docker_config:
+  image: ${REGISTRY}cccs/assemblyline-service-admarkup:$SERVICE_TAG
+  cpu_cores: 1.0
+  ram_mb: 1024
+  allow_internet_access: false
