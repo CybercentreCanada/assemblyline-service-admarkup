@@ -11,7 +11,6 @@ from assemblyline_v4_service.common.result import Result, ResultSection
 from assemblyline_v4_service.common.task import Task
 
 from admarkup.admarkup import AdMarkup
-from admarkup.limits import ResourceLimits
 
 
 def test_service_imports_from_service_path():
@@ -34,15 +33,12 @@ def test_execute_submits_each_unique_payload_and_reports_framework_rejections(tm
         ],
     }
     service = object.__new__(AdMarkup)
-    service.limits = ResourceLimits()
     monkeypatch.setattr(AdMarkup, "working_directory", property(lambda _self: str(tmp_path)), raising=False)
     request = Mock()
     input_path = tmp_path / "input.json"
     input_path.write_text(json.dumps(document), encoding="utf-8")
     request.file_path = str(input_path)
     request.file_size = input_path.stat().st_size
-    request.task.depth = 0
-    request.max_extracted = 0
     request.extracted = []
     request.add_extracted.side_effect = [True, False]
 
@@ -96,15 +92,12 @@ def test_execute_submits_each_unique_payload_and_reports_framework_rejections(tm
 
 def test_synthetic_fixture_preserves_child_bytes_provenance_and_diagnostics(tmp_path, monkeypatch):
     service = object.__new__(AdMarkup)
-    service.limits = ResourceLimits()
     monkeypatch.setattr(AdMarkup, "working_directory", property(lambda _self: str(tmp_path)), raising=False)
     fixture_path = Path(__file__).parent / "fixtures" / "openrtb_synthetic_response.json"
 
     request = Mock()
     request.file_path = str(fixture_path)
     request.file_size = fixture_path.stat().st_size
-    request.task.depth = 0
-    request.max_extracted = 0
     request.extracted = []
     request.add_extracted.return_value = True
 
@@ -155,15 +148,12 @@ def test_synthetic_fixture_preserves_child_bytes_provenance_and_diagnostics(tmp_
 
 def test_invalid_utf8_is_reported_as_a_skip(tmp_path, monkeypatch):
     service = object.__new__(AdMarkup)
-    service.limits = ResourceLimits()
     monkeypatch.setattr(AdMarkup, "working_directory", property(lambda _self: str(tmp_path)), raising=False)
     request = Mock()
     input_path = tmp_path / "input.json"
     input_path.write_bytes(b"\xff")
     request.file_path = str(input_path)
     request.file_size = 1
-    request.task.depth = 0
-    request.max_extracted = 0
     request.extracted = []
 
     service.execute(request)
@@ -190,14 +180,7 @@ def test_service_manifest_scopes_json_and_disables_privilege_and_internet():
     assert manifest["update_channel"] == "stable"
     assert manifest["docker_config"]["allow_internet_access"] is False
     assert not manifest.get("dependencies")
-    assert manifest["config"] == {
-        "max_input_bytes": 10485760,
-        "max_json_depth": 64,
-        "max_json_nodes": 100000,
-        "max_extracted_children": 50,
-        "max_payload_bytes": 5242880,
-        "max_total_child_bytes": 20971520,
-    }
+    assert "config" not in manifest
 
 
 def test_framework_preserves_minimum_classification_for_child_and_result(tmp_path):

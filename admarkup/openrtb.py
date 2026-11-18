@@ -5,8 +5,6 @@ import json
 import math
 from dataclasses import dataclass
 
-from admarkup.limits import ResourceLimits
-
 
 class _DuplicateJSONKeyError(ValueError):
     """Raised when a JSON object contains an ambiguous duplicate key."""
@@ -84,48 +82,7 @@ def _reject_json_constant(_constant):
     raise _NonJSONConstantError
 
 
-def _document_limit_issue(response, limits: ResourceLimits) -> RecognitionIssue | None:
-    """Check JSON value depth and count without recursive traversal.
-
-    Returns:
-        The first limit violation, or ``None`` if the document is within both limits.
-    """
-    pending = [(iter((response,)), 0)]
-    node_count = 0
-    while pending:
-        iterator, depth = pending[-1]
-        try:
-            value = next(iterator)
-        except StopIteration:
-            pending.pop()
-            continue
-
-        if depth > limits.max_json_depth:
-            return RecognitionIssue(
-                "$",
-                f"JSON depth {depth} exceeds the configured maximum of {limits.max_json_depth}; "
-                "no bids were processed.",
-            )
-
-        node_count += 1
-        if node_count > limits.max_json_nodes:
-            return RecognitionIssue(
-                "$",
-                f"JSON node count exceeds the configured maximum of {limits.max_json_nodes}; no bids were processed.",
-            )
-
-        if isinstance(value, dict):
-            pending.append((iter(value.values()), depth + 1))
-        elif isinstance(value, list):
-            pending.append((iter(value), depth + 1))
-
-    return None
-
-
-def recognize_openrtb_response(
-    document: str,
-    limits: ResourceLimits = ResourceLimits(),
-) -> OpenRTBRecognition:
+def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
     """Recognize the supported root response shape and extract direct bid markup.
 
     Returns:
@@ -177,10 +134,6 @@ def recognize_openrtb_response(
                 ),
             ),
         )
-
-    limit_issue = _document_limit_issue(response, limits)
-    if limit_issue:
-        return OpenRTBRecognition(recognized=False, markups=(), payloads=(), issues=(limit_issue,))
 
     if not isinstance(response, dict):
         return OpenRTBRecognition(

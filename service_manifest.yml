@@ -24,22 +24,6 @@ privileged: false
 is_external: false
 update_channel: stable
 
-config:
-  max_input_bytes: 10485760
-  max_json_depth: 64
-  max_json_nodes: 100000
-  max_extracted_children: 50
-  max_payload_bytes: 5242880
-  max_total_child_bytes: 20971520
-
-# Service heuristic blocks: List of heuristic objects that define the different heuristics used in the service
-# heuristics:
-#   - description: This is a demo heuristic
-#     filetype: "*"
-#     heur_id: 1
-#     name: Demo
-#     score: 100
-
 # Docker configuration block which defines:
 #  - the name of the docker container that will be created
 #  - CPU and ram allocation by the container
