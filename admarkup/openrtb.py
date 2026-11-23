@@ -4,6 +4,13 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
+from typing import Literal
+from urllib.parse import urlsplit
+
+from assemblyline.common.net import is_valid_domain
+from assemblyline.odm import URI
+
+_URI_VALIDATOR = URI()
 
 
 class _DuplicateJSONKeyError(ValueError):
@@ -47,6 +54,15 @@ class RecognitionIssue:
 
 
 @dataclass(frozen=True)
+class NetworkIndicator:
+    """A network indicator and the bid field that supplied it."""
+
+    source_path: str
+    tag_type: Literal["network.static.uri", "network.static.domain"]
+    value: str
+
+
+@dataclass(frozen=True)
 class OpenRTBRecognition:
     """Recognition result for a single OpenRTB response document."""
 
@@ -54,6 +70,59 @@ class OpenRTBRecognition:
     markups: tuple[ExtractedMarkup, ...]
     payloads: tuple[PreparedPayload, ...]
     issues: tuple[RecognitionIssue, ...]
+    network_indicators: tuple[NetworkIndicator, ...] = ()
+
+
+def rejected_input(message: str) -> OpenRTBRecognition:
+    """Return a rejected document with a root-level diagnostic."""
+    return OpenRTBRecognition(
+        recognized=False,
+        markups=(),
+        payloads=(),
+        issues=(RecognitionIssue("$", message),),
+    )
+
+
+def _bid_network_indicators(
+    bid: dict[str, object], bid_path: str, issues: list[RecognitionIssue]
+) -> list[NetworkIndicator]:
+    indicators = []
+    for field in ("iurl", "burl", "nurl", "lurl"):
+        if field not in bid:
+            continue
+        path = f"{bid_path}.{field}"
+        value = bid[field]
+        if not isinstance(value, str) or not value:
+            issues.append(RecognitionIssue(path, f"Bid {field} must be a non-empty URL string."))
+            continue
+        try:
+            if not _URI_VALIDATOR.validation_regex.fullmatch(value):
+                raise ValueError("Invalid URI syntax")
+            _URI_VALIDATOR.check(value)
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            # Accessing port validates its syntax and range.
+            _ = parsed.port
+        except ValueError:
+            issues.append(RecognitionIssue(path, f"Bid {field} must be a valid URL."))
+            continue
+        indicators.append(NetworkIndicator(path, "network.static.uri", value))
+        if hostname and is_valid_domain(hostname):
+            indicators.append(NetworkIndicator(path, "network.static.domain", hostname))
+
+    if "adomain" in bid:
+        domains = bid["adomain"]
+        path = f"{bid_path}.adomain"
+        if not isinstance(domains, list):
+            issues.append(RecognitionIssue(path, "Bid adomain must be an array of domains."))
+        else:
+            for index, domain in enumerate(domains):
+                source_path = f"{path}[{index}]"
+                if not isinstance(domain, str) or not is_valid_domain(domain):
+                    issues.append(RecognitionIssue(source_path, "Bid adomain entry must be a valid domain."))
+                    continue
+                indicators.append(NetworkIndicator(source_path, "network.static.domain", domain.lower()))
+    return indicators
 
 
 def _unique_object(pairs):
@@ -118,6 +187,7 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
 
     markups = []
     issues = []
+    network_indicators = []
     payloads_by_content = {}
     for seat_index, seat in enumerate(response["seatbid"]):
         seat_path = f"$.seatbid[{seat_index}]"
@@ -151,6 +221,8 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
             if bid_issues:
                 issues.extend(bid_issues)
                 continue
+
+            network_indicators.extend(_bid_network_indicators(bid, bid_path, issues))
 
             if "adm" not in bid:
                 continue
@@ -209,14 +281,5 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
         markups=tuple(markups),
         payloads=payloads,
         issues=tuple(issues),
+        network_indicators=tuple(network_indicators),
     )
-def rejected_input(message: str) -> OpenRTBRecognition:
-    """Return a rejected document with a root-level diagnostic."""
-    return OpenRTBRecognition(
-        recognized=False,
-        markups=(),
-        payloads=(),
-        issues=(RecognitionIssue("$", message),),
-    )
-
-

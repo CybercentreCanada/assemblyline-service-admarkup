@@ -101,6 +101,12 @@ class AdMarkup(ServiceBase):
         extraction = self._extract_payloads(request, recognition)
         for section in _report_sections(input_size, recognition, extraction):
             result.add_section(section)
+        if recognition.network_indicators:
+            section = ResultSection("OpenRTB network indicators")
+            for indicator in recognition.network_indicators:
+                section.add_line(f"{indicator.source_path}: {indicator.value} ({indicator.tag_type})")
+                section.add_tag(indicator.tag_type, indicator.value)
+            result.add_section(section)
 
     def _recognize(self, request: ServiceRequest) -> tuple[int, OpenRTBRecognition]:
         """Return the input size and OpenRTB recognition of the input file."""
