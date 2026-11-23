@@ -144,6 +144,14 @@ def test_synthetic_fixture_preserves_child_bytes_provenance_and_diagnostics(tmp_
     assert "$.seatbid[0].bid[2].adm" in result_text
     assert "Synthetic root decoy" not in result_text
     assert "Synthetic nested decoy" not in result_text
+    network_section = next(
+        section for section in request.result.sections if section.title_text == "OpenRTB network indicators"
+    )
+    assert network_section.tags == {
+        "network.static.uri": ["https://ads.example.com/synthetic-campaign.png"],
+        "network.static.domain": ["ads.example.com", "advertiser.example.com"],
+    }
+    assert "$.seatbid[0].bid[0].adomain[0]: advertiser.example.com" in network_section.body
 
 
 def test_invalid_utf8_is_reported_as_a_skip(tmp_path, monkeypatch):
