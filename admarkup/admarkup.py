@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 from assemblyline.common import forge
 from assemblyline_v4_service.common.base import ServiceBase
@@ -133,7 +134,7 @@ class AdMarkup(ServiceBase):
 
     def _submit_child(self, request: ServiceRequest, payload: PreparedPayload) -> bool:
         """Return whether Assemblyline accepted the payload after writing it and adding it as an extracted file."""
-        path = Path(self.working_directory) / payload.filename
+        path = Path(self.working_directory) / f"{uuid4().hex}-{payload.filename}"
         path.write_bytes(payload.content)
         description = f"Extracted OpenRTB adm payload; SHA-256: {payload.sha256}; source paths: {_paths(payload)}"
         accepted = request.add_extracted(str(path), payload.filename, description)
