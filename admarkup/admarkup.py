@@ -10,7 +10,7 @@ from assemblyline_v4_service.common.request import ServiceRequest
 from assemblyline_v4_service.common.result import Result, ResultKeyValueSection, ResultSection
 from assemblyline_v4_service.common.task import MaxExtractedExceeded
 
-from admarkup.openrtb import OpenRTBRecognition, PreparedPayload, RecognitionIssue, recognize_openrtb_response
+from admarkup.openrtb import OpenRTBRecognition, PreparedPayload, recognize_openrtb_response, rejected_input
 
 
 @dataclass
@@ -61,15 +61,6 @@ def _paths(payload: PreparedPayload) -> str:
     return ", ".join(payload.source_paths)
 
 
-def _rejected_input(message: str) -> OpenRTBRecognition:
-    return OpenRTBRecognition(
-        recognized=False,
-        markups=(),
-        payloads=(),
-        issues=(RecognitionIssue("$", message),),
-    )
-
-
 def _report_sections(input_size: int, recognition: OpenRTBRecognition, extraction: _Extraction) -> list[ResultSection]:
     summary = ResultKeyValueSection("OpenRTB markup extraction summary")
     summary.set_item("Input bytes", input_size)
@@ -87,7 +78,14 @@ def _report_sections(input_size: int, recognition: OpenRTBRecognition, extractio
         ("OpenRTB extraction skips", extraction.skip_lines),
         ("Extraction limit reached", extraction.truncation_lines),
     )
-    return [summary, *(ResultSection(title, "\n".join(lines)) for title, lines in detail_sections if lines)]
+    
+    return [
+        summary,
+        *(
+            ResultSection(title, "\n".join(lines))
+            for title, lines in detail_sections if lines
+        )
+    ]
 
 
 class AdMarkup(ServiceBase):
@@ -111,7 +109,7 @@ class AdMarkup(ServiceBase):
         try:
             document = raw_document.decode("utf-8")
         except UnicodeDecodeError:
-            return len(raw_document), _rejected_input("Invalid JSON: document must be UTF-8 encoded.")
+            return len(raw_document), rejected_input("Invalid JSON: document must be UTF-8 encoded.")
         return len(raw_document), recognize_openrtb_response(document)
 
     def _extract_payloads(self, request: ServiceRequest, recognition: OpenRTBRecognition) -> _Extraction:

@@ -95,53 +95,18 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
             parse_constant=_reject_json_constant,
         )
     except _DuplicateJSONKeyError:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", "Invalid JSON: duplicate object keys are not allowed."),),
-        )
+        return rejected_input("Invalid JSON: duplicate object keys are not allowed.")
     except _NonJSONConstantError:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", "Invalid JSON: non-standard numeric constants are not allowed."),),
-        )
+        return rejected_input("Invalid JSON: non-standard numeric constants are not allowed.")
     except json.JSONDecodeError as error:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", f"Invalid JSON: {error.msg}"),),
-        )
+        return rejected_input(f"Invalid JSON: {error.msg}")
     except ValueError:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", "Invalid JSON: a numeric value exceeds parser limits."),),
-        )
+        return rejected_input("Invalid JSON: a numeric value exceeds parser limits.")
     except RecursionError:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(
-                RecognitionIssue(
-                    "$",
-                    "JSON nesting exceeds the parser's safe recursion depth; no bids were processed.",
-                ),
-            ),
-        )
+        return rejected_input("JSON nesting exceeds the parser's safe recursion depth; no bids were processed.")
 
     if not isinstance(response, dict):
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", "The document root must be an object."),),
-        )
+        return rejected_input("The document root must be an object.")
 
     root_issues = []
     if not isinstance(response.get("id"), str):
@@ -245,3 +210,13 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
         payloads=payloads,
         issues=tuple(issues),
     )
+def rejected_input(message: str) -> OpenRTBRecognition:
+    """Return a rejected document with a root-level diagnostic."""
+    return OpenRTBRecognition(
+        recognized=False,
+        markups=(),
+        payloads=(),
+        issues=(RecognitionIssue("$", message),),
+    )
+
+
