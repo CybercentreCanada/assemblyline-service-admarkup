@@ -98,9 +98,14 @@ class AdMarkup(ServiceBase):
         request.result = result
 
         input_size, recognition = self._recognize(request)
+        if not recognition.recognized:
+            return
+
         extraction = self._extract_payloads(request, recognition)
+
         for section in _report_sections(input_size, recognition, extraction):
             result.add_section(section)
+
         if recognition.network_indicators:
             section = ResultSection("OpenRTB network indicators")
             for indicator in recognition.network_indicators:
