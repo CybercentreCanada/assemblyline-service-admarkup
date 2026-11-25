@@ -76,6 +76,13 @@ def test_payload_over_platform_max_file_size_is_skipped_and_sibling_is_extracted
     service.execute(request)
 
     assert len(request.extracted) == 1
+    summary_section = request.result.sections[0]
+    summary = json.loads(summary_section.body)
+    assert summary["Extracted payloads"] == 1
+    assert "Policy-skipped payloads" not in summary
+    assert "Unique payloads not submitted" not in summary
+    assert "Truncated" not in summary
+    assert summary_section.subsections == []
     request.log.warning.assert_called_once()
     assert "exceeds max_file_size" in request.log.warning.call_args.args[0]
     assert request.log.warning.call_args.args[-1] == 3
@@ -88,10 +95,14 @@ def test_platform_max_file_size_of_zero_is_unlimited(tmp_path, monkeypatch):
     service.execute(request)
 
     assert len(request.extracted) == 2
+    summary = json.loads(request.result.sections[0].body)
+    assert "Policy-skipped payloads" not in summary
+    assert "Truncated" not in summary
+    assert request.result.sections[0].subsections == []
     request.log.warning.assert_not_called()
 
 
-def test_framework_extraction_exception_retains_prior_children_and_reports_truncation(tmp_path, monkeypatch):
+def test_framework_extraction_exception_retains_prior_children_and_logs_truncation(tmp_path, monkeypatch):
     service = _service(tmp_path, monkeypatch)
     request = _request(tmp_path, _document("one", "two", "three"))
     attempts = 0
@@ -112,7 +123,14 @@ def test_framework_extraction_exception_retains_prior_children_and_reports_trunc
     assert attempts == 2
     request.log.warning.assert_called_once()
     assert "max_extracted" in request.log.warning.call_args.args[0]
+    assert request.log.warning.call_args.args[1] == 2
     assert len(request.result.sections) == 1
+    summary_section = request.result.sections[0]
+    summary = json.loads(summary_section.body)
+    assert summary["Extracted payloads"] == 1
+    assert "Unique payloads not submitted" not in summary
+    assert "Truncated" not in summary
+    assert summary_section.subsections == []
 
 
 def test_unexpected_child_file_io_error_surfaces(tmp_path, monkeypatch):

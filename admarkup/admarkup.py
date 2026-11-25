@@ -11,16 +11,21 @@ from assemblyline_v4_service.common.task import MaxExtractedExceeded
 
 from admarkup.openrtb import OpenRTBRecognition, PreparedPayload, recognize_openrtb_response, rejected_input
 
-def _report_section(recognition: OpenRTBRecognition) -> ResultSection:
+
+def _report_section(recognition: OpenRTBRecognition, extracted: int) -> ResultSection:
     summary = ResultKeyValueSection("Markup extraction summary")
-    
+
     source_format = recognition.source_format
     recognized_label = "OpenRTB response" if source_format == "OpenRTB" else "Prebid.js auction event"
     summary.set_item("Recognized Type", recognized_label)
     summary.set_item("Markup occurrences", len(recognition.markups))
-    
-    return summary
+    summary.set_item("Extracted payloads", extracted)
 
+    details = [f"{issue.path}: {issue.message}" for issue in recognition.issues]
+    if details:
+        summary.add_subsection(ResultSection("Extraction issues", "\n".join(details)))
+
+    return summary
 
 
 class AdMarkup(ServiceBase):
@@ -36,9 +41,9 @@ class AdMarkup(ServiceBase):
         if not recognition.recognized:
             return
 
-        self._extract_payloads(request, recognition)
+        extracted = self._extract_payloads(request, recognition)
 
-        summary_section = _report_section(recognition)
+        summary_section = _report_section(recognition, extracted)
         result.add_section(summary_section)
 
         if recognition.network_indicators:
@@ -58,12 +63,13 @@ class AdMarkup(ServiceBase):
             except UnicodeDecodeError:
                 return rejected_input("Invalid JSON: document must be UTF-8 encoded.")
 
-    def _extract_payloads(self, request: ServiceRequest, recognition: OpenRTBRecognition):
-        """Return the extraction outcome after submitting each unique payload as an extracted child."""
+    def _extract_payloads(self, request: ServiceRequest, recognition: OpenRTBRecognition) -> int:
+        """Return the number of unique payloads accepted as extracted children."""
         payloads = recognition.payloads
         max_file_size = forge.get_config().submission.max_file_size
+        extracted = 0
 
-        for payload in payloads:
+        for index, payload in enumerate(payloads):
             if max_file_size > 0 and payload.byte_length > max_file_size:
                 request.log.warning(
                     "Skipping oversize payload %s (SHA-256 %s; %d bytes exceeds max_file_size %d)",
@@ -75,17 +81,24 @@ class AdMarkup(ServiceBase):
                 continue
 
             try:
-                self._submit_child(request, payload, recognition.source_format)
+                accepted = self._submit_child(request, payload, recognition.source_format)
             except MaxExtractedExceeded:
-                request.log.warning("Reached max_extracted limit; remaining AdMarkup payloads were not submitted")
+                request.log.warning(
+                    "Reached max_extracted limit; %d unique AdMarkup payloads were not submitted",
+                    len(payloads) - index,
+                )
                 break
+            if accepted:
+                extracted += 1
+        return extracted
 
-    def _submit_child(self, request: ServiceRequest, payload: PreparedPayload, source_format: str):
+    def _submit_child(self, request: ServiceRequest, payload: PreparedPayload, source_format: str) -> bool:
         """Return whether Assemblyline accepted the payload after writing it and adding it as an extracted file."""
         path = Path(self.working_directory) / f"{uuid4().hex}-{payload.filename}"
         path.write_bytes(payload.content)
         description = (
-            f"Extracted {source_format} adm payload; SHA-256: {payload.sha256}"
+            f"Extracted {source_format} adm payload; SHA-256: {payload.sha256}; "
+            f"source paths: {', '.join(payload.source_paths)}"
         )
         accepted = request.add_extracted(str(path), payload.filename, description)
         if not accepted:
@@ -94,3 +107,4 @@ class AdMarkup(ServiceBase):
                 payload.filename,
                 payload.sha256,
             )
+        return accepted
