@@ -1,5 +1,6 @@
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -319,3 +320,80 @@ def test_malformed_json_is_reported():
     assert not result.recognized
     assert result.markups == ()
     assert result.issues[0].path == "$"
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"source": "other", "event": "auctionEnd", "payload": {"bidsReceived": [bid()]}},
+        {"source": "pbjs", "event": "bidResponse", "payload": {"bidsReceived": [bid()]}},
+        {"source": "pbjs", "event": "auctionEnd", "payload": {"bidsReceived": {}}},
+        {"source": "pbjs", "event": "auctionEnd", "payload": None},
+        {"source": "pbjs", "event": "bidWon", "payload": [bid()]},
+    ],
+)
+def test_rejects_nonmatching_prebid_envelopes(document):
+    result = recognize_openrtb_response(json.dumps(document))
+    assert not result.recognized
+    assert result.payloads == ()
+
+
+def test_prebid_handles_malformed_bids_and_empty_markup_without_losing_valid_siblings():
+    document = {
+        "source": "pbjs",
+        "event": "auctionEnd",
+        "payload": {"bidsReceived": [None, {"adm": ""}, {"adm": "\ud800"}, {"adm": "valid"}]},
+    }
+
+    result = recognize_openrtb_response(json.dumps(document))
+
+    assert result.recognized
+    assert result.source_format == "Prebid.js"
+    assert [payload.content for payload in result.payloads] == [b"valid"]
+    assert result.payloads[0].source_paths == ("$.payload.bidsReceived[3].adm",)
+    assert [issue.path for issue in result.issues] == [
+        "$.payload.bidsReceived[0]",
+        "$.payload.bidsReceived[1].adm",
+        "$.payload.bidsReceived[2].adm",
+    ]
+
+
+def test_openrtb_response_takes_precedence_over_embedded_prebid_envelope():
+    document = response(
+        {"bid": [bid(adm="openrtb")]},
+        source="pbjs",
+        event="auctionEnd",
+        payload={"bidsReceived": [{"adm": "prebid"}]},
+    )
+    result = recognize_openrtb_response(document)
+
+    assert result.source_format == "OpenRTB"
+    assert [payload.content for payload in result.payloads] == [b"openrtb"]
+
+
+def test_prebid_bid_won_extracts_payload_markup_and_url_indicators():
+    fixture = Path(__file__).parent / "fixtures" / "prebid_synthetic_bid_won.json"
+
+    result = recognize_openrtb_response(fixture.read_text(encoding="utf-8"))
+
+    assert result.recognized
+    assert result.source_format == "Prebid.js"
+    assert [markup.source_path for markup in result.markups] == ["$.payload.adm"]
+    assert result.payloads[0].content == b'<div class="campaign">Synthetic winning display</div>'
+    assert {(i.source_path, i.tag_type, i.value) for i in result.network_indicators} == {
+        ("$.payload.adomain[0]", "network.static.uri", "https://www.advertiser.example.com/"),
+        ("$.payload.adomain[0]", "network.static.domain", "www.advertiser.example.com"),
+        ("$.payload.adomain[1]", "network.static.domain", "brand.example.com"),
+        ("$.payload.iurl", "network.static.uri", "https://ads.example.com/synthetic-win.png"),
+        ("$.payload.iurl", "network.static.domain", "ads.example.com"),
+        (
+            "$.payload.eventtrackers[0].url",
+            "network.static.uri",
+            "https://tracker.example.com/event?t=win&b=synthetic-bid-1",
+        ),
+        ("$.payload.eventtrackers[0].url", "network.static.domain", "tracker.example.com"),
+    }
+    assert {issue.path for issue in result.issues} == {
+        "$.payload.adomain[2]",
+        "$.payload.eventtrackers[1].url",
+    }

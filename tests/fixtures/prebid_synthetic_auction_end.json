@@ -1,0 +1,47 @@
+{
+  "source": "pbjs",
+  "event": "auctionEnd",
+  "payload": {
+    "auctionId": "synthetic-auction-001",
+    "auctionStatus": "completed",
+    "adUnitCodes": ["synthetic-banner"],
+    "bidderRequests": [],
+    "bidsReceived": [
+      {
+        "bidder": "synthetic-bidder",
+        "bidderCode": "synthetic-bidder",
+        "adUnitCode": "synthetic-banner",
+        "mediaType": "banner",
+        "cpm": 0.42,
+        "currency": "USD",
+        "width": 300,
+        "height": 250,
+        "adomain": ["advertiser.example.com"],
+        "adm": "<div class=\"campaign\">Synthetic display</div>"
+      },
+      {
+        "id": "synthetic-bid-002",
+        "impid": "synthetic-impression-002",
+        "price": 0.73,
+        "adm": "<div class=\"campaign\">Synthetic display</div>"
+      },
+      {
+        "bidder": "synthetic-bidder",
+        "adm": "const campaign = \"synthetic\";\nconst label = \"café\";"
+      },
+      {
+        "bidder": "synthetic-bidder",
+        "adm": false
+      },
+      {
+        "bidder": "synthetic-bidder",
+        "ext": {"adm": "Synthetic nested decoy"}
+      }
+    ],
+    "bidsRejected": [],
+    "noBids": [],
+    "winningBids": []
+  },
+  "meta": {"pbjs": "synthetic"},
+  "adm": "Synthetic root decoy"
+}

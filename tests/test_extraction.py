@@ -43,14 +43,6 @@ def _document(*markups):
     return json.dumps({"id": "response-1", "seatbid": [{"bid": bids}]}).encode("utf-8")
 
 
-def _summary(request):
-    return json.loads(request.result.sections[0].body)
-
-
-def _result_text(request):
-    return "\n".join(str(section.body) for section in request.result.sections[1:])
-
-
 def test_decoder_recursion_limit_becomes_a_controlled_input_issue():
     nested = "[" * 1200 + "0" + "]" * 1200
     document = f'{{"id":"response-1","seatbid":[],"ext":{nested}}}'
@@ -84,9 +76,9 @@ def test_payload_over_platform_max_file_size_is_skipped_and_sibling_is_extracted
     service.execute(request)
 
     assert len(request.extracted) == 1
-    assert _summary(request)["Extracted payloads"] == 1
-    assert _summary(request)["Policy-skipped payloads"] == 1
-    assert "platform max_file_size 3" in _result_text(request)
+    request.log.warning.assert_called_once()
+    assert "exceeds max_file_size" in request.log.warning.call_args.args[0]
+    assert request.log.warning.call_args.args[-1] == 3
 
 
 def test_platform_max_file_size_of_zero_is_unlimited(tmp_path, monkeypatch):
@@ -96,7 +88,7 @@ def test_platform_max_file_size_of_zero_is_unlimited(tmp_path, monkeypatch):
     service.execute(request)
 
     assert len(request.extracted) == 2
-    assert _summary(request)["Policy-skipped payloads"] == 0
+    request.log.warning.assert_not_called()
 
 
 def test_framework_extraction_exception_retains_prior_children_and_reports_truncation(tmp_path, monkeypatch):
@@ -117,9 +109,10 @@ def test_framework_extraction_exception_retains_prior_children_and_reports_trunc
     service.execute(request)
 
     assert len(request.extracted) == 1
-    assert _summary(request)["Extracted payloads"] == 1
-    assert _summary(request)["Truncated"] is True
-    assert "Unique payloads not submitted: 2" in _result_text(request)
+    assert attempts == 2
+    request.log.warning.assert_called_once()
+    assert "max_extracted" in request.log.warning.call_args.args[0]
+    assert len(request.result.sections) == 1
 
 
 def test_unexpected_child_file_io_error_surfaces(tmp_path, monkeypatch):
