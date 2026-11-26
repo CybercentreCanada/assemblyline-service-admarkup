@@ -138,6 +138,36 @@ def test_synthetic_fixture_preserves_child_bytes_provenance_and_diagnostics(tmp_
     assert "$.seatbid[0].bid[0].adomain[0]: advertiser.example.com" in network_section.body
 
 
+def test_standalone_bid_fixture_extracts_markup_and_reports_indicators(tmp_path, monkeypatch):
+    service = object.__new__(AdMarkup)
+    monkeypatch.setattr(AdMarkup, "working_directory", property(lambda _self: str(tmp_path)), raising=False)
+    request = Mock()
+    request.file_path = str(Path(__file__).parent / "fixtures" / "openrtb_synthetic_bid.json")
+    request.add_extracted.return_value = True
+
+    service.execute(request)
+
+    request.add_extracted.assert_called_once()
+    path, filename, description = request.add_extracted.call_args.args
+    content = b"<div>Synthetic standalone ad</div>"
+    digest = hashlib.sha256(content).hexdigest()
+    assert Path(path).read_bytes() == content
+    assert filename == f"adm-{digest}.txt"
+    assert description == f"Extracted OpenRTB bid adm payload; SHA-256: {digest}; source paths: $.adm"
+    summary = request.result.sections[0]
+    assert json.loads(summary.body) == {
+        "Recognized Type": "OpenRTB bid",
+        "Markup occurrences": 1,
+        "Extracted payloads": 1,
+    }
+    network = summary.subsections[0]
+    assert network.tags == {
+        "network.static.uri": ["https://ads.example.com/creative.png"],
+        "network.static.domain": ["ads.example.com", "advertiser.example.com"],
+    }
+    assert "$.adomain[0]: advertiser.example.com" in network.body
+
+
 def test_prebid_fixture_extracts_unique_markup_and_reports_source_paths(tmp_path, monkeypatch):
     service = object.__new__(AdMarkup)
     monkeypatch.setattr(AdMarkup, "working_directory", property(lambda _self: str(tmp_path)), raising=False)

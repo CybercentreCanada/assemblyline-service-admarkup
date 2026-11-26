@@ -8,15 +8,13 @@ from assemblyline_v4_service.common.request import ServiceRequest
 from assemblyline_v4_service.common.result import Result, ResultKeyValueSection, ResultSection
 from assemblyline_v4_service.common.task import MaxExtractedExceeded
 
-from admarkup.openrtb import OpenRTBRecognition, PreparedPayload, recognize_openrtb_response, rejected_input
+from admarkup.openrtb import OpenRTBRecognition, PreparedPayload, SourceFormat, recognize_openrtb_response, rejected_input
 
 
 def _report_section(recognition: OpenRTBRecognition, extracted: int) -> ResultSection:
     summary = ResultKeyValueSection("Markup extraction summary")
 
-    source_format = recognition.source_format
-    recognized_label = "OpenRTB response" if source_format == "OpenRTB" else "Prebid.js auction event"
-    summary.set_item("Recognized Type", recognized_label)
+    summary.set_item("Recognized Type", recognition.source_format.recognized_label)
     summary.set_item("Markup occurrences", len(recognition.markups))
     summary.set_item("Extracted payloads", extracted)
 
@@ -80,12 +78,12 @@ class AdMarkup(ServiceBase):
                 extracted += 1
         return extracted
 
-    def _submit_child(self, request: ServiceRequest, payload: PreparedPayload, source_format: str) -> bool:
+    def _submit_child(self, request: ServiceRequest, payload: PreparedPayload, source_format: SourceFormat) -> bool:
         """Return whether Assemblyline accepted the payload after writing it and adding it as an extracted file."""
         path = Path(self.working_directory) / f"{uuid4().hex}-{payload.filename}"
         path.write_bytes(payload.content)
         description = (
-            f"Extracted {source_format} adm payload; SHA-256: {payload.sha256}; "
+            f"Extracted {source_format.description} adm payload; SHA-256: {payload.sha256}; "
             f"source paths: {', '.join(payload.source_paths)}"
         )
         accepted = request.add_extracted(str(path), payload.filename, description)

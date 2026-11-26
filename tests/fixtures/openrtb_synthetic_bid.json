@@ -1,0 +1,13 @@
+{
+  "id": "synthetic-bid-1",
+  "impid": "synthetic-impression-1",
+  "price": 1.25,
+  "adm": "<div>Synthetic standalone ad</div>",
+  "adomain": ["advertiser.example.com"],
+  "iurl": "https://ads.example.com/creative.png",
+  "crid": "synthetic-creative-1",
+  "w": 300,
+  "h": 250,
+  "exp": 300,
+  "ext": {"adm": "nested decoy"}
+}

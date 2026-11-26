@@ -4,6 +4,7 @@ import hashlib
 import json
 import math
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -11,6 +12,18 @@ from assemblyline.common.net import is_valid_domain
 from assemblyline.odm import URI
 
 _URI_VALIDATOR = URI()
+
+
+class SourceFormat(Enum):
+    """Source format and its labels for child descriptions and result summaries."""
+
+    OPENRTB_RESPONSE = ("OpenRTB", "OpenRTB response")
+    OPENRTB_BID = ("OpenRTB bid", "OpenRTB bid")
+    PREBID = ("Prebid.js", "Prebid.js auction event")
+
+    def __init__(self, description: str, recognized_label: str):
+        self.description = description
+        self.recognized_label = recognized_label
 
 
 class _DuplicateJSONKeyError(ValueError):
@@ -71,7 +84,7 @@ class OpenRTBRecognition:
     payloads: tuple[PreparedPayload, ...]
     issues: tuple[RecognitionIssue, ...]
     network_indicators: tuple[NetworkIndicator, ...] = ()
-    source_format: Literal["OpenRTB", "Prebid.js"] = "OpenRTB"
+    source_format: SourceFormat = SourceFormat.OPENRTB_RESPONSE
 
 
 def rejected_input(message: str) -> OpenRTBRecognition:
@@ -185,8 +198,23 @@ def _reject_json_constant(_constant):
     raise _NonJSONConstantError
 
 
+def _bid_required_issues(bid: dict, bid_path: str) -> list[RecognitionIssue]:
+    issues = []
+    if not isinstance(bid.get("id"), str):
+        issues.append(RecognitionIssue(f"{bid_path}.id", "Bid id must be a string."))
+    if not isinstance(bid.get("impid"), str):
+        issues.append(RecognitionIssue(f"{bid_path}.impid", "Bid impid must be a string."))
+    price = bid.get("price")
+    valid_price = (isinstance(price, int) and not isinstance(price, bool)) or (
+        isinstance(price, float) and math.isfinite(price)
+    )
+    if not valid_price:
+        issues.append(RecognitionIssue(f"{bid_path}.price", "Bid price must be a finite JSON number."))
+    return issues
+
+
 def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
-    """Recognize supported OpenRTB responses or Prebid.js auctionEnd and bidWon records.
+    """Recognize OpenRTB responses, standalone bids, or supported Prebid.js events.
 
     Returns:
         The recognition status, per-bid markup, unique prepared payloads, and issues.
@@ -220,13 +248,15 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
     prebid_bids = event_payload.get("bidsReceived") if isinstance(event_payload, dict) else None
     is_prebid = response.get("source") == "pbjs"
     if isinstance(response.get("id"), str) and isinstance(response.get("seatbid"), list):
-        source_format = "OpenRTB"
+        source_format = SourceFormat.OPENRTB_RESPONSE
     elif is_prebid and response.get("event") == "auctionEnd" and isinstance(prebid_bids, list):
-        source_format = "Prebid.js"
+        source_format = SourceFormat.PREBID
     elif is_prebid and response.get("event") == "bidWon" and isinstance(event_payload, dict):
-        source_format = "Prebid.js"
+        source_format = SourceFormat.PREBID
         # A bidWon event carries the winning bid object itself as its payload.
         prebid_bids = None
+    elif "seatbid" not in response and not _bid_required_issues(response, "$"):
+        source_format = SourceFormat.OPENRTB_BID
     else:
         root_issues = []
         if not isinstance(response.get("id"), str):
@@ -238,11 +268,13 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
 
     def bid_groups():
         """Yield (seat_index, [(bid_index, bid_path, bid), ...]) for each group of bids."""
-        if source_format == "Prebid.js":
+        if source_format == SourceFormat.PREBID:
             if isinstance(prebid_bids, list):
                 yield None, [(i, f"$.payload.bidsReceived[{i}]", bid) for i, bid in enumerate(prebid_bids)]
             else:
                 yield None, [(0, "$.payload", event_payload)]
+        elif source_format == SourceFormat.OPENRTB_BID:
+            yield None, [(0, "$", response)]
         else:
             for seat_index, seat in enumerate(response["seatbid"]):
                 seat_path = f"$.seatbid[{seat_index}]"
@@ -261,18 +293,8 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
                 issues.append(RecognitionIssue(bid_path, "Bid entry must be an object."))
                 continue
 
-            if source_format == "OpenRTB":
-                bid_issues = []
-                if not isinstance(bid.get("id"), str):
-                    bid_issues.append(RecognitionIssue(f"{bid_path}.id", "Bid id must be a string."))
-                if not isinstance(bid.get("impid"), str):
-                    bid_issues.append(RecognitionIssue(f"{bid_path}.impid", "Bid impid must be a string."))
-                price = bid.get("price")
-                valid_price = (isinstance(price, int) and not isinstance(price, bool)) or (
-                    isinstance(price, float) and math.isfinite(price)
-                )
-                if not valid_price:
-                    bid_issues.append(RecognitionIssue(f"{bid_path}.price", "Bid price must be a finite JSON number."))
+            if source_format != SourceFormat.PREBID:
+                bid_issues = _bid_required_issues(bid, bid_path)
                 if bid_issues:
                     issues.extend(bid_issues)
                     continue
