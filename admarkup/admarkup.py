@@ -3,7 +3,6 @@
 from pathlib import Path
 from uuid import uuid4
 
-from assemblyline.common import forge
 from assemblyline_v4_service.common.base import ServiceBase
 from assemblyline_v4_service.common.request import ServiceRequest
 from assemblyline_v4_service.common.result import Result, ResultKeyValueSection, ResultSection
@@ -66,20 +65,9 @@ class AdMarkup(ServiceBase):
     def _extract_payloads(self, request: ServiceRequest, recognition: OpenRTBRecognition) -> int:
         """Return the number of unique payloads accepted as extracted children."""
         payloads = recognition.payloads
-        max_file_size = forge.get_config().submission.max_file_size
         extracted = 0
 
         for index, payload in enumerate(payloads):
-            if max_file_size > 0 and payload.byte_length > max_file_size:
-                request.log.warning(
-                    "Skipping oversize payload %s (SHA-256 %s; %d bytes exceeds max_file_size %d)",
-                    payload.filename,
-                    payload.sha256,
-                    payload.byte_length,
-                    max_file_size,
-                )
-                continue
-
             try:
                 accepted = self._submit_child(request, payload, recognition.source_format)
             except MaxExtractedExceeded:

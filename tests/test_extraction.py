@@ -1,21 +1,17 @@
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from assemblyline_v4_service.common.task import MaxExtractedExceeded
 
-import admarkup.admarkup as admarkup_module
 from admarkup.admarkup import AdMarkup
 from admarkup.openrtb import recognize_openrtb_response
 
 
-def _service(tmp_path, monkeypatch, max_file_size=100 * 1_048_576):
+def _service(tmp_path, monkeypatch):
     service = object.__new__(AdMarkup)
     monkeypatch.setattr(AdMarkup, "working_directory", property(lambda _self: str(tmp_path)), raising=False)
-    submission = SimpleNamespace(max_file_size=max_file_size)
-    monkeypatch.setattr(admarkup_module.forge, "get_config", lambda: SimpleNamespace(submission=submission))
     return service
 
 
@@ -67,39 +63,6 @@ def test_json_numeric_parser_limit_is_reported_as_invalid_input():
     assert not result.recognized
     assert result.payloads == ()
     assert "numeric value exceeds parser limits" in result.issues[0].message
-
-
-def test_payload_over_platform_max_file_size_is_skipped_and_sibling_is_extracted(tmp_path, monkeypatch):
-    service = _service(tmp_path, monkeypatch, max_file_size=3)
-    request = _request(tmp_path, _document("four", "abc"))
-
-    service.execute(request)
-
-    assert len(request.extracted) == 1
-    summary_section = request.result.sections[0]
-    summary = json.loads(summary_section.body)
-    assert summary["Extracted payloads"] == 1
-    assert "Policy-skipped payloads" not in summary
-    assert "Unique payloads not submitted" not in summary
-    assert "Truncated" not in summary
-    assert summary_section.subsections == []
-    request.log.warning.assert_called_once()
-    assert "exceeds max_file_size" in request.log.warning.call_args.args[0]
-    assert request.log.warning.call_args.args[-1] == 3
-
-
-def test_platform_max_file_size_of_zero_is_unlimited(tmp_path, monkeypatch):
-    service = _service(tmp_path, monkeypatch, max_file_size=0)
-    request = _request(tmp_path, _document("four", "abc"))
-
-    service.execute(request)
-
-    assert len(request.extracted) == 2
-    summary = json.loads(request.result.sections[0].body)
-    assert "Policy-skipped payloads" not in summary
-    assert "Truncated" not in summary
-    assert request.result.sections[0].subsections == []
-    request.log.warning.assert_not_called()
 
 
 def test_framework_extraction_exception_retains_prior_children_and_logs_truncation(tmp_path, monkeypatch):
