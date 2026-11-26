@@ -1,21 +1,17 @@
 import json
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from assemblyline_v4_service.common.task import MaxExtractedExceeded
 
-import admarkup.admarkup as admarkup_module
 from admarkup.admarkup import AdMarkup
 from admarkup.openrtb import recognize_openrtb_response
 
 
-def _service(tmp_path, monkeypatch, max_file_size=100 * 1_048_576):
+def _service(tmp_path, monkeypatch):
     service = object.__new__(AdMarkup)
     monkeypatch.setattr(AdMarkup, "working_directory", property(lambda _self: str(tmp_path)), raising=False)
-    submission = SimpleNamespace(max_file_size=max_file_size)
-    monkeypatch.setattr(admarkup_module.forge, "get_config", lambda: SimpleNamespace(submission=submission))
     return service
 
 
@@ -41,14 +37,6 @@ def _document(*markups):
         for index, markup in enumerate(markups)
     ]
     return json.dumps({"id": "response-1", "seatbid": [{"bid": bids}]}).encode("utf-8")
-
-
-def _summary(request):
-    return json.loads(request.result.sections[0].body)
-
-
-def _result_text(request):
-    return "\n".join(str(section.body) for section in request.result.sections[1:])
 
 
 def test_decoder_recursion_limit_becomes_a_controlled_input_issue():
@@ -77,29 +65,7 @@ def test_json_numeric_parser_limit_is_reported_as_invalid_input():
     assert "numeric value exceeds parser limits" in result.issues[0].message
 
 
-def test_payload_over_platform_max_file_size_is_skipped_and_sibling_is_extracted(tmp_path, monkeypatch):
-    service = _service(tmp_path, monkeypatch, max_file_size=3)
-    request = _request(tmp_path, _document("four", "abc"))
-
-    service.execute(request)
-
-    assert len(request.extracted) == 1
-    assert _summary(request)["Extracted payloads"] == 1
-    assert _summary(request)["Policy-skipped payloads"] == 1
-    assert "platform max_file_size 3" in _result_text(request)
-
-
-def test_platform_max_file_size_of_zero_is_unlimited(tmp_path, monkeypatch):
-    service = _service(tmp_path, monkeypatch, max_file_size=0)
-    request = _request(tmp_path, _document("four", "abc"))
-
-    service.execute(request)
-
-    assert len(request.extracted) == 2
-    assert _summary(request)["Policy-skipped payloads"] == 0
-
-
-def test_framework_extraction_exception_retains_prior_children_and_reports_truncation(tmp_path, monkeypatch):
+def test_framework_extraction_exception_retains_prior_children_and_logs_truncation(tmp_path, monkeypatch):
     service = _service(tmp_path, monkeypatch)
     request = _request(tmp_path, _document("one", "two", "three"))
     attempts = 0
@@ -117,9 +83,17 @@ def test_framework_extraction_exception_retains_prior_children_and_reports_trunc
     service.execute(request)
 
     assert len(request.extracted) == 1
-    assert _summary(request)["Extracted payloads"] == 1
-    assert _summary(request)["Truncated"] is True
-    assert "Unique payloads not submitted: 2" in _result_text(request)
+    assert attempts == 2
+    request.log.warning.assert_called_once()
+    assert "max_extracted" in request.log.warning.call_args.args[0]
+    assert request.log.warning.call_args.args[1] == 2
+    assert len(request.result.sections) == 1
+    summary_section = request.result.sections[0]
+    summary = json.loads(summary_section.body)
+    assert summary["Extracted payloads"] == 1
+    assert "Unique payloads not submitted" not in summary
+    assert "Truncated" not in summary
+    assert summary_section.subsections == []
 
 
 def test_unexpected_child_file_io_error_surfaces(tmp_path, monkeypatch):

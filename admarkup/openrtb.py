@@ -1,9 +1,16 @@
-"""Recognize supported OpenRTB bid responses and extract direct bid markup."""
+"""Recognize supported ad-auction documents and extract direct bid markup."""
 
 import hashlib
 import json
 import math
 from dataclasses import dataclass
+from typing import Literal
+from urllib.parse import urlsplit
+
+from assemblyline.common.net import is_valid_domain
+from assemblyline.odm import URI
+
+_URI_VALIDATOR = URI()
 
 
 class _DuplicateJSONKeyError(ValueError):
@@ -18,10 +25,10 @@ class _NonJSONConstantError(ValueError):
 class ExtractedMarkup:
     """Markup extracted from one structurally valid bid."""
 
-    seat_index: int
+    seat_index: int | None
     bid_index: int
-    bid_id: str
-    impression_id: str
+    bid_id: str | None
+    impression_id: str | None
     markup: str
     source_path: str
 
@@ -47,13 +54,109 @@ class RecognitionIssue:
 
 
 @dataclass(frozen=True)
+class NetworkIndicator:
+    """A network indicator and the bid field that supplied it."""
+
+    source_path: str
+    tag_type: Literal["network.static.uri", "network.static.domain"]
+    value: str
+
+
+@dataclass(frozen=True)
 class OpenRTBRecognition:
-    """Recognition result for a single OpenRTB response document."""
+    """Recognition result for a supported ad-auction document."""
 
     recognized: bool
     markups: tuple[ExtractedMarkup, ...]
     payloads: tuple[PreparedPayload, ...]
     issues: tuple[RecognitionIssue, ...]
+    network_indicators: tuple[NetworkIndicator, ...] = ()
+    source_format: Literal["OpenRTB", "Prebid.js"] = "OpenRTB"
+
+
+def rejected_input(message: str) -> OpenRTBRecognition:
+    """Return a rejected document with a root-level diagnostic."""
+    return OpenRTBRecognition(
+        recognized=False,
+        markups=(),
+        payloads=(),
+        issues=(RecognitionIssue("$", message),),
+    )
+
+
+def _url_indicators(path: str, value: str) -> list[NetworkIndicator] | None:
+    """Return URI and host-domain indicators for a valid URL, or None when the URL is invalid."""
+    try:
+        if not _URI_VALIDATOR.validation_regex.fullmatch(value):
+            raise ValueError("Invalid URI syntax")
+        _URI_VALIDATOR.check(value)
+        parsed = urlsplit(value)
+        hostname = parsed.hostname
+        # Accessing port validates its syntax and range.
+        _ = parsed.port
+    except ValueError:
+        return None
+    indicators = [NetworkIndicator(path, "network.static.uri", value)]
+    if hostname and is_valid_domain(hostname):
+        indicators.append(NetworkIndicator(path, "network.static.domain", hostname))
+    return indicators
+
+
+def _bid_network_indicators(
+    bid: dict[str, object], bid_path: str, issues: list[RecognitionIssue]
+) -> list[NetworkIndicator]:
+    indicators = []
+    for field in ("iurl", "burl", "nurl", "lurl"):
+        if field not in bid:
+            continue
+        path = f"{bid_path}.{field}"
+        value = bid[field]
+        if not isinstance(value, str) or not value:
+            issues.append(RecognitionIssue(path, f"Bid {field} must be a non-empty URL string."))
+            continue
+        url_indicators = _url_indicators(path, value)
+        if url_indicators is None:
+            issues.append(RecognitionIssue(path, f"Bid {field} must be a valid URL."))
+            continue
+        indicators.extend(url_indicators)
+
+    if "adomain" in bid:
+        domains = bid["adomain"]
+        path = f"{bid_path}.adomain"
+        if not isinstance(domains, list):
+            issues.append(RecognitionIssue(path, "Bid adomain must be an array of domains."))
+        else:
+            for index, domain in enumerate(domains):
+                source_path = f"{path}[{index}]"
+                if isinstance(domain, str) and is_valid_domain(domain):
+                    indicators.append(NetworkIndicator(source_path, "network.static.domain", domain.lower()))
+                    continue
+                # Some bidders send an advertiser URL instead of a bare domain.
+                url_indicators = (
+                    _url_indicators(source_path, domain)
+                    if isinstance(domain, str) and domain.lower().startswith(("http://", "https://"))
+                    else None
+                )
+                if url_indicators is None:
+                    issues.append(RecognitionIssue(source_path, "Bid adomain entry must be a valid domain."))
+                    continue
+                indicators.extend(url_indicators)
+
+    if "eventtrackers" in bid:
+        trackers = bid["eventtrackers"]
+        path = f"{bid_path}.eventtrackers"
+        if not isinstance(trackers, list):
+            issues.append(RecognitionIssue(path, "Bid eventtrackers must be an array."))
+        else:
+            for index, tracker in enumerate(trackers):
+                source_path = f"{path}[{index}].url"
+                url = tracker.get("url") if isinstance(tracker, dict) else None
+                url_indicators = _url_indicators(source_path, url) if isinstance(url, str) and url else None
+                if url_indicators is None:
+                    issues.append(RecognitionIssue(source_path, "Bid event tracker url must be a valid URL."))
+                    continue
+                indicators.extend(url_indicators)
+    return indicators
 
 
 def _unique_object(pairs):
@@ -83,7 +186,7 @@ def _reject_json_constant(_constant):
 
 
 def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
-    """Recognize the supported root response shape and extract direct bid markup.
+    """Recognize supported OpenRTB responses or Prebid.js auctionEnd and bidWon records.
 
     Returns:
         The recognition status, per-bid markup, unique prepared payloads, and issues.
@@ -95,97 +198,86 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
             parse_constant=_reject_json_constant,
         )
     except _DuplicateJSONKeyError:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", "Invalid JSON: duplicate object keys are not allowed."),),
-        )
+        return rejected_input("Invalid JSON: duplicate object keys are not allowed.")
     except _NonJSONConstantError:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", "Invalid JSON: non-standard numeric constants are not allowed."),),
-        )
+        return rejected_input("Invalid JSON: non-standard numeric constants are not allowed.")
     except json.JSONDecodeError as error:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", f"Invalid JSON: {error.msg}"),),
-        )
+        return rejected_input(f"Invalid JSON: {error.msg}")
     except ValueError:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", "Invalid JSON: a numeric value exceeds parser limits."),),
-        )
+        return rejected_input("Invalid JSON: a numeric value exceeds parser limits.")
     except RecursionError:
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(
-                RecognitionIssue(
-                    "$",
-                    "JSON nesting exceeds the parser's safe recursion depth; no bids were processed.",
-                ),
-            ),
-        )
+        return rejected_input("JSON nesting exceeds the parser's safe recursion depth; no bids were processed.")
 
     if not isinstance(response, dict):
-        return OpenRTBRecognition(
-            recognized=False,
-            markups=(),
-            payloads=(),
-            issues=(RecognitionIssue("$", "The document root must be an object."),),
-        )
-
-    root_issues = []
-    if not isinstance(response.get("id"), str):
-        root_issues.append(RecognitionIssue("$.id", "Response id must be a string."))
-    if not isinstance(response.get("seatbid"), list):
-        root_issues.append(RecognitionIssue("$.seatbid", "Response seatbid must be an array."))
-    if root_issues:
-        return OpenRTBRecognition(recognized=False, markups=(), payloads=(), issues=tuple(root_issues))
+        return rejected_input("The document root must be an object.")
 
     markups = []
     issues = []
+    network_indicators = []
     payloads_by_content = {}
-    for seat_index, seat in enumerate(response["seatbid"]):
-        seat_path = f"$.seatbid[{seat_index}]"
-        if not isinstance(seat, dict):
-            issues.append(RecognitionIssue(seat_path, "SeatBid entry must be an object."))
-            continue
 
-        bids = seat.get("bid")
-        if not isinstance(bids, list):
-            issues.append(RecognitionIssue(f"{seat_path}.bid", "SeatBid bid must be an array."))
-            continue
+    event_payload = response.get("payload")
+    prebid_bids = event_payload.get("bidsReceived") if isinstance(event_payload, dict) else None
+    is_prebid = response.get("source") == "pbjs"
+    if isinstance(response.get("id"), str) and isinstance(response.get("seatbid"), list):
+        source_format = "OpenRTB"
+    elif is_prebid and response.get("event") == "auctionEnd" and isinstance(prebid_bids, list):
+        source_format = "Prebid.js"
+    elif is_prebid and response.get("event") == "bidWon" and isinstance(event_payload, dict):
+        source_format = "Prebid.js"
+        # A bidWon event carries the winning bid object itself as its payload.
+        prebid_bids = None
+    else:
+        root_issues = []
+        if not isinstance(response.get("id"), str):
+            root_issues.append(RecognitionIssue("$.id", "Response id must be a string."))
+        if not isinstance(response.get("seatbid"), list):
+            root_issues.append(RecognitionIssue("$.seatbid", "Response seatbid must be an array."))
+        if root_issues:
+            return OpenRTBRecognition(recognized=False, markups=(), payloads=(), issues=tuple(root_issues))
 
-        for bid_index, bid in enumerate(bids):
-            bid_path = f"{seat_path}.bid[{bid_index}]"
+    def bid_groups():
+        """Yield (seat_index, [(bid_index, bid_path, bid), ...]) for each group of bids."""
+        if source_format == "Prebid.js":
+            if isinstance(prebid_bids, list):
+                yield None, [(i, f"$.payload.bidsReceived[{i}]", bid) for i, bid in enumerate(prebid_bids)]
+            else:
+                yield None, [(0, "$.payload", event_payload)]
+        else:
+            for seat_index, seat in enumerate(response["seatbid"]):
+                seat_path = f"$.seatbid[{seat_index}]"
+                if not isinstance(seat, dict):
+                    issues.append(RecognitionIssue(seat_path, "SeatBid entry must be an object."))
+                    continue
+                bids = seat.get("bid")
+                if not isinstance(bids, list):
+                    issues.append(RecognitionIssue(f"{seat_path}.bid", "SeatBid bid must be an array."))
+                    continue
+                yield seat_index, [(i, f"{seat_path}.bid[{i}]", bid) for i, bid in enumerate(bids)]
+
+    for seat_index, bid_entries in bid_groups():
+        for bid_index, bid_path, bid in bid_entries:
             if not isinstance(bid, dict):
                 issues.append(RecognitionIssue(bid_path, "Bid entry must be an object."))
                 continue
 
-            bid_issues = []
-            if not isinstance(bid.get("id"), str):
-                bid_issues.append(RecognitionIssue(f"{bid_path}.id", "Bid id must be a string."))
-            if not isinstance(bid.get("impid"), str):
-                bid_issues.append(RecognitionIssue(f"{bid_path}.impid", "Bid impid must be a string."))
-            price = bid.get("price")
-            valid_price = (isinstance(price, int) and not isinstance(price, bool)) or (
-                isinstance(price, float) and math.isfinite(price)
-            )
-            if not valid_price:
-                bid_issues.append(RecognitionIssue(f"{bid_path}.price", "Bid price must be a finite JSON number."))
+            if source_format == "OpenRTB":
+                bid_issues = []
+                if not isinstance(bid.get("id"), str):
+                    bid_issues.append(RecognitionIssue(f"{bid_path}.id", "Bid id must be a string."))
+                if not isinstance(bid.get("impid"), str):
+                    bid_issues.append(RecognitionIssue(f"{bid_path}.impid", "Bid impid must be a string."))
+                price = bid.get("price")
+                valid_price = (isinstance(price, int) and not isinstance(price, bool)) or (
+                    isinstance(price, float) and math.isfinite(price)
+                )
+                if not valid_price:
+                    bid_issues.append(RecognitionIssue(f"{bid_path}.price", "Bid price must be a finite JSON number."))
+                if bid_issues:
+                    issues.extend(bid_issues)
+                    continue
 
-            if bid_issues:
-                issues.extend(bid_issues)
-                continue
+            network_indicators.extend(_bid_network_indicators(bid, bid_path, issues))
 
             if "adm" not in bid:
                 continue
@@ -208,8 +300,8 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
                 ExtractedMarkup(
                     seat_index=seat_index,
                     bid_index=bid_index,
-                    bid_id=bid["id"],
-                    impression_id=bid["impid"],
+                    bid_id=bid.get("id") if isinstance(bid.get("id"), str) else None,
+                    impression_id=bid.get("impid") if isinstance(bid.get("impid"), str) else None,
                     markup=adm,
                     source_path=source_path,
                 )
@@ -244,4 +336,6 @@ def recognize_openrtb_response(document: str) -> OpenRTBRecognition:
         markups=tuple(markups),
         payloads=payloads,
         issues=tuple(issues),
+        network_indicators=tuple(network_indicators),
+        source_format=source_format,
     )

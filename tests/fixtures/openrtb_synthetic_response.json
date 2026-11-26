@@ -8,6 +8,8 @@
           "id": "bid-synthetic-001",
           "impid": "imp-synthetic-001",
           "price": 0.42,
+          "iurl": "https://ads.example.com/synthetic-campaign.png",
+          "adomain": ["advertiser.example.com"],
           "adm": "<div class=\"campaign\">Synthetic display</div>"
         },
         {

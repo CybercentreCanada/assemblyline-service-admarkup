@@ -1,6 +1,6 @@
 name: AdMarkup
 version: $SERVICE_TAG
-description: Identifies and extracts advertising markup from supported OpenRTB bid responses.
+description: Identifies and extracts advertising markup from supported OpenRTB responses and Prebid.js auction events.
 
 # Regex defining the types of files the service accepts and rejects
 accepts: '^text/json$'

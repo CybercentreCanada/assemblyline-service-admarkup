@@ -1,0 +1,30 @@
+{
+  "source": "pbjs",
+  "event": "bidWon",
+  "payload": {
+    "bidderCode": "examplebidder",
+    "width": 300,
+    "height": 250,
+    "adId": "synthetic-ad-1",
+    "requestId": "synthetic-request-1",
+    "auctionId": "synthetic-auction-1",
+    "mediaType": "banner",
+    "id": "synthetic-bid-1",
+    "impid": "synthetic-imp-1",
+    "price": 1.25,
+    "cpm": 1.25,
+    "currency": "USD",
+    "adm": "<div class=\"campaign\">Synthetic winning display</div>",
+    "adomain": ["https://www.advertiser.example.com/", "brand.example.com", "not a domain"],
+    "iurl": "https://ads.example.com/synthetic-win.png",
+    "eventtrackers": [
+      {"event": 500, "method": 1, "url": "https://tracker.example.com/event?t=win&b=synthetic-bid-1"},
+      {"event": 1, "method": 1}
+    ],
+    "adUnitCode": "synthetic-slot-1",
+    "status": "rendered",
+    "ad": "Synthetic non-adm decoy"
+  },
+  "partnerId": 1,
+  "meta": {"sampling": 1, "pbjs": "v10.0.0", "tz": 0}
+}

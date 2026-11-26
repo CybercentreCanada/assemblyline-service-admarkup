@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+import pytest
 import yaml
 from assemblyline.common import forge
 from assemblyline_v4_service.common.base import ServiceBase
@@ -18,7 +19,7 @@ def test_service_imports_from_service_path():
     assert issubclass(AdMarkup, ServiceBase)
 
 
-def test_execute_submits_each_unique_payload_and_reports_framework_rejections(tmp_path, monkeypatch):
+def test_execute_submits_each_unique_payload_and_logs_framework_rejections(tmp_path, monkeypatch):
     document = {
         "id": "response-1",
         "seatbid": [
@@ -55,8 +56,8 @@ def test_execute_submits_each_unique_payload_and_reports_framework_rejections(tm
     assert Path(first_call.args[0]).read_bytes() == first_content
     assert first_call.args[1] == f"adm-{first_digest}.txt"
     assert first_call.args[2] == (
-        "Extracted OpenRTB adm payload; SHA-256: "
-        f"{first_digest}; source paths: $.seatbid[0].bid[0].adm, $.seatbid[0].bid[1].adm"
+        f"Extracted OpenRTB adm payload; SHA-256: {first_digest}; "
+        "source paths: $.seatbid[0].bid[0].adm, $.seatbid[0].bid[1].adm"
     )
     assert Path(second_call.args[0]).parent == tmp_path
     assert Path(second_call.args[0]).read_bytes() == second_content
@@ -68,26 +69,24 @@ def test_execute_submits_each_unique_payload_and_reports_framework_rejections(tm
     request.drop.assert_not_called()
     request.api.submit.assert_not_called()
     assert request.log.warning.call_count == 1
+    assert "Assemblyline rejected" in request.log.warning.call_args.args[0]
+    assert request.log.warning.call_args.args[1:] == (f"adm-{second_digest}.txt", second_digest)
 
-    summary = json.loads(request.result.sections[0].body)
-    assert summary == {
-        "Input bytes": input_path.stat().st_size,
-        "Recognized OpenRTB response": True,
+    assert len(request.result.sections) == 1
+    summary_section = request.result.sections[0]
+    assert summary_section.title_text == "Markup extraction summary"
+    assert json.loads(summary_section.body) == {
+        "Recognized Type": "OpenRTB response",
         "Markup occurrences": 3,
-        "Unique payloads": 2,
         "Extracted payloads": 1,
-        "Rejected payloads": 1,
-        "Policy-skipped payloads": 0,
-        "Skipped items": 2,
-        "Truncated": False,
     }
-    assert summary["Input bytes"] == input_path.stat().st_size
-    section_text = "\n".join(str(section.body) for section in request.result.sections[1:])
-    assert f"{first_digest}; 16 bytes; extracted" in section_text
-    assert f"{second_digest}; 17 bytes; rejected by Assemblyline" in section_text
-    assert "$.seatbid[0].bid[3].adm" in section_text
-    assert "<p>synthetic</p>" not in section_text
-    assert "const marker = 3;" not in section_text
+    assert len(summary_section.subsections) == 1
+    issues = summary_section.subsections[0]
+    assert issues.title_text == "Extraction issues"
+    assert "$.seatbid[0].bid[3].adm: Bid adm must be a string when present." in issues.body
+    assert "Assemblyline rejected" not in issues.body
+    assert "<p>synthetic</p>" not in summary_section.body
+    assert "const marker = 3;" not in summary_section.body
 
 
 def test_synthetic_fixture_preserves_child_bytes_provenance_and_diagnostics(tmp_path, monkeypatch):
@@ -106,11 +105,8 @@ def test_synthetic_fixture_preserves_child_bytes_provenance_and_diagnostics(tmp_
     html_content = b'<div class="campaign">Synthetic display</div>'
     javascript_content = 'const campaign = "synthetic";\nconst label = "café";'.encode("utf-8")
     expected_children = (
-        (
-            html_content,
-            ("$.seatbid[0].bid[0].adm", "$.seatbid[0].bid[1].adm"),
-        ),
-        (javascript_content, ("$.seatbid[0].bid[2].adm",)),
+        (html_content, "$.seatbid[0].bid[0].adm, $.seatbid[0].bid[1].adm"),
+        (javascript_content, "$.seatbid[0].bid[2].adm"),
     )
     assert request.add_extracted.call_count == len(expected_children)
     for call, (content, source_paths) in zip(request.add_extracted.call_args_list, expected_children):
@@ -119,50 +115,76 @@ def test_synthetic_fixture_preserves_child_bytes_provenance_and_diagnostics(tmp_
         assert Path(child_path).parent == tmp_path
         assert Path(child_path).read_bytes() == content
         assert filename == f"adm-{digest}.txt"
-        assert description == (
-            f"Extracted OpenRTB adm payload; SHA-256: {digest}; source paths: {', '.join(source_paths)}"
-        )
+        assert description == f"Extracted OpenRTB adm payload; SHA-256: {digest}; source paths: {source_paths}"
 
-    summary = json.loads(request.result.sections[0].body)
-    assert summary == {
-        "Input bytes": fixture_path.stat().st_size,
-        "Recognized OpenRTB response": True,
-        "Markup occurrences": 3,
-        "Unique payloads": 2,
-        "Extracted payloads": 2,
-        "Rejected payloads": 0,
-        "Policy-skipped payloads": 0,
-        "Skipped items": 1,
-        "Truncated": False,
+    assert len(request.result.sections) == 1
+    summary_section = request.result.sections[0]
+    summary = json.loads(summary_section.body)
+    assert summary["Recognized Type"] == "OpenRTB response"
+    assert summary["Markup occurrences"] == 3
+    assert summary["Extracted payloads"] == 2
+    assert summary_section.heuristic is None
+    sections = {section.title_text: section for section in summary_section.subsections}
+    assert "$.seatbid[0].bid[3].adm: Bid adm must be a string when present." in sections["Extraction issues"].body
+    network_section = sections["Network Indicators"]
+    assert network_section.title_text == "Network Indicators"
+    assert network_section.heuristic is None
+    assert "Synthetic root decoy" not in network_section.body
+    assert "Synthetic nested decoy" not in network_section.body
+    assert network_section.tags == {
+        "network.static.uri": ["https://ads.example.com/synthetic-campaign.png"],
+        "network.static.domain": ["ads.example.com", "advertiser.example.com"],
     }
-    assert all(section.heuristic is None for section in request.result.sections)
-    skip_section = request.result.sections[2]
-    assert skip_section.title_text == "OpenRTB extraction skips"
-    assert skip_section.body == "$.seatbid[0].bid[3].adm: Bid adm must be a string when present."
-    result_text = "\n".join(str(section.body) for section in request.result.sections[1:])
-    assert "$.seatbid[0].bid[0].adm, $.seatbid[0].bid[1].adm" in result_text
-    assert "$.seatbid[0].bid[2].adm" in result_text
-    assert "Synthetic root decoy" not in result_text
-    assert "Synthetic nested decoy" not in result_text
+    assert "$.seatbid[0].bid[0].adomain[0]: advertiser.example.com" in network_section.body
 
 
-def test_invalid_utf8_is_reported_as_a_skip(tmp_path, monkeypatch):
+def test_prebid_fixture_extracts_unique_markup_and_reports_source_paths(tmp_path, monkeypatch):
     service = object.__new__(AdMarkup)
     monkeypatch.setattr(AdMarkup, "working_directory", property(lambda _self: str(tmp_path)), raising=False)
+    fixture_path = Path(__file__).parent / "fixtures" / "prebid_synthetic_auction_end.json"
     request = Mock()
-    input_path = tmp_path / "input.json"
-    input_path.write_bytes(b"\xff")
-    request.file_path = str(input_path)
-    request.file_size = 1
-    request.extracted = []
+    request.file_path = str(fixture_path)
+    request.add_extracted.return_value = True
 
     service.execute(request)
 
-    assert request.add_extracted.call_count == 0
-    summary = json.loads(request.result.sections[0].body)
-    assert summary["Recognized OpenRTB response"] is False
-    assert summary["Skipped items"] == 1
-    assert "document must be UTF-8 encoded" in request.result.sections[1].body
+    assert request.add_extracted.call_count == 2
+    html_call, js_call = request.add_extracted.call_args_list
+    assert Path(html_call.args[0]).read_bytes() == b'<div class="campaign">Synthetic display</div>'
+    assert Path(js_call.args[0]).read_bytes() == 'const campaign = "synthetic";\nconst label = "café";'.encode()
+    assert html_call.args[2].startswith("Extracted Prebid.js adm payload;")
+    assert js_call.args[2].startswith("Extracted Prebid.js adm payload;")
+    assert "source paths: $.payload.bidsReceived[0].adm, $.payload.bidsReceived[1].adm" in html_call.args[2]
+    assert "source paths: $.payload.bidsReceived[2].adm" in js_call.args[2]
+
+    summary_section = request.result.sections[0]
+    assert summary_section.title_text == "Markup extraction summary"
+    summary = json.loads(summary_section.body)
+    assert summary["Recognized Type"] == "Prebid.js auction event"
+    assert summary["Markup occurrences"] == 3
+    assert summary["Extracted payloads"] == 2
+    sections = {section.title_text: section for section in summary_section.subsections}
+    assert "$.payload.bidsReceived[3].adm: Bid adm must be a string when present." in sections["Extraction issues"].body
+    network_section = sections["Network Indicators"]
+    assert "$.payload.bidsReceived[0].adomain[0]" in network_section.body
+    assert network_section.tags["network.static.domain"] == ["advertiser.example.com"]
+
+
+@pytest.mark.parametrize("raw", [b"\xff", b"not json", b'{"message": "not a bid response"}'])
+def test_unrecognized_input_is_not_reported(tmp_path, monkeypatch, raw):
+    service = object.__new__(AdMarkup)
+    extract = Mock()
+    monkeypatch.setattr(AdMarkup, "_extract_payloads", extract)
+    request = Mock()
+    input_path = tmp_path / "input.json"
+    input_path.write_bytes(raw)
+    request.file_path = str(input_path)
+
+    service.execute(request)
+
+    extract.assert_not_called()
+    request.add_extracted.assert_not_called()
+    assert request.result.sections == []
 
 
 def test_service_manifest_scopes_json_and_disables_privilege_and_internet():
