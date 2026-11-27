@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from admarkup.openrtb import recognize_openrtb_response
+from admarkup.openrtb import SourceFormat, recognize_openrtb_response
 
 
 def bid(**overrides):
@@ -348,7 +348,7 @@ def test_prebid_handles_malformed_bids_and_empty_markup_without_losing_valid_sib
     result = recognize_openrtb_response(json.dumps(document))
 
     assert result.recognized
-    assert result.source_format == "Prebid.js"
+    assert result.source_format == SourceFormat.PREBID
     assert [payload.content for payload in result.payloads] == [b"valid"]
     assert result.payloads[0].source_paths == ("$.payload.bidsReceived[3].adm",)
     assert [issue.path for issue in result.issues] == [
@@ -367,8 +367,64 @@ def test_openrtb_response_takes_precedence_over_embedded_prebid_envelope():
     )
     result = recognize_openrtb_response(document)
 
-    assert result.source_format == "OpenRTB"
+    assert result.source_format == SourceFormat.OPENRTB_RESPONSE
     assert [payload.content for payload in result.payloads] == [b"openrtb"]
+
+
+def test_response_and_prebid_envelopes_take_precedence_over_standalone_bid_fields():
+    root_bid_fields = {"impid": "root-imp", "price": 1, "adm": "root decoy"}
+    result = recognize_openrtb_response(
+        response({"bid": [bid(adm="response markup")]}, **root_bid_fields)
+    )
+    assert result.source_format == SourceFormat.OPENRTB_RESPONSE
+    assert [payload.content for payload in result.payloads] == [b"response markup"]
+
+    event = {
+        "id": "root-id",
+        **root_bid_fields,
+        "source": "pbjs",
+        "event": "bidWon",
+        "payload": {"adm": "prebid markup"},
+    }
+    result = recognize_openrtb_response(json.dumps(event))
+    assert result.source_format == SourceFormat.PREBID
+    assert [payload.content for payload in result.payloads] == [b"prebid markup"]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [{"id": None}, {"impid": None}, {"price": True}, {"price": "1"}, {"price": float("inf")}, {"seatbid": None}],
+)
+def test_invalid_standalone_bid_is_not_recognized(overrides):
+    result = recognize_openrtb_response(json.dumps(bid(**overrides)))
+    assert not result.recognized
+    assert result.payloads == ()
+
+
+@pytest.mark.parametrize("field", ["id", "impid", "price"])
+def test_standalone_bid_requires_bid_fields(field):
+    document = bid()
+    document.pop(field)
+    result = recognize_openrtb_response(json.dumps(document))
+    assert not result.recognized
+    assert result.payloads == ()
+
+
+def test_standalone_bid_without_adm_is_recognized():
+    result = recognize_openrtb_response(json.dumps(bid_without_adm()))
+    assert result.recognized
+    assert result.source_format == SourceFormat.OPENRTB_BID
+    assert result.payloads == ()
+    assert result.issues == ()
+
+
+def test_standalone_bid_reports_invalid_adm():
+    result = recognize_openrtb_response(json.dumps(bid(adm=False)))
+    assert result.recognized
+    assert result.payloads == ()
+    assert [(issue.path, issue.message) for issue in result.issues] == [
+        ("$.adm", "Bid adm must be a string when present.")
+    ]
 
 
 def test_prebid_bid_won_extracts_payload_markup_and_url_indicators():
@@ -377,7 +433,7 @@ def test_prebid_bid_won_extracts_payload_markup_and_url_indicators():
     result = recognize_openrtb_response(fixture.read_text(encoding="utf-8"))
 
     assert result.recognized
-    assert result.source_format == "Prebid.js"
+    assert result.source_format == SourceFormat.PREBID
     assert [markup.source_path for markup in result.markups] == ["$.payload.adm"]
     assert result.payloads[0].content == b'<div class="campaign">Synthetic winning display</div>'
     assert {(i.source_path, i.tag_type, i.value) for i in result.network_indicators} == {
